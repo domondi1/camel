@@ -113,6 +113,7 @@
                   "cookbooks/advanced_features/agents_with_memory",
                   "cookbooks/advanced_features/agents_with_oceanbase_advanced_usage",
                   "cookbooks/advanced_features/agents_with_rag",
+                  "cookbooks/advanced_features/agents_with_run_budget",
                   "cookbooks/advanced_features/agents_with_tools",
                   "cookbooks/advanced_features/agents_with_tools_from_ACI",
                   "cookbooks/advanced_features/agents_with_tools_from_Composio",
