@@ -20,6 +20,7 @@ Advanced Features
    agents_with_graph_rag
    agents_with_MCP
    agents_with_oceanbase_advanced_usage
+   agents_with_run_budget
    agents_tracking
    critic_agents_and_tree_search
    agent_generate_structured_output
