@@ -1,0 +1,115 @@
+---
+title: "Agents with a Run Budget"
+---
+
+
+Star us on GitHub: https://github.com/camel-ai/camel
+
+This cookbook shows how to:
+- Give one agent run its own dollar budget, enforced before each model call.
+- Stop a run cleanly when its budget is used up, without the call reaching the provider.
+- Read what each run cost afterwards.
+
+## Overview
+
+An agent run usually makes several model calls, and a loop, a retry or a Workforce fanning out to several workers can make that number hard to predict. Iteration limits count calls, not dollars.
+
+Here every model call of a run carries the run's id and a dollar budget as two request headers, sent through [Inferrail](https://github.com/domondi1/inferrail), an open-source OpenAI-compatible gateway started inside the notebook process. Each call reserves its estimated cost (prompt plus `max_tokens`) atomically before it is sent, so parallel calls can't all spend the same remaining dollars. A call that doesn't fit is refused with HTTP 402 and never reaches the provider. Prompts and responses aren't stored.
+
+## Installation
+
+`camel-ai` 0.2.90 needs `mcp` below 2.0 to import, so pin it:
+
+```python
+!pip install "camel-ai==0.2.90" "mcp<2" "inferrail>=0.4.10"
+```
+
+Set your OpenAI key. Inferrail reads it and calls OpenAI on the agent's behalf.
+
+```python
+import os
+from getpass import getpass
+
+os.environ["OPENAI_API_KEY"] = getpass("OpenAI API key: ")
+```
+
+## Start Inferrail
+
+`inferrail.start()` runs the gateway on a background thread on a free local port, with no config file, and returns its base URL.
+
+```python
+import inferrail
+
+base_url = inferrail.start()  # Inferrail inside this process; reads OPENAI_API_KEY
+```
+
+## A model per run
+
+Build one model per run with the run's id and budget as headers. Every call the agent makes with it, including retries, draws from the same budget. `gpt-4o-mini` is only an example: use any model your account can use (`inferrail models` lists them, and which ones Inferrail has a price for; a budget needs a price).
+
+```python
+from camel.agents import ChatAgent
+from camel.models import ModelFactory
+from camel.types import ModelPlatformType
+
+
+def model_for_run(run_id: str, budget_usd: str):
+    """One model per run: every call it makes shares the run's dollar budget."""
+    return ModelFactory.create(
+        model_platform=ModelPlatformType.OPENAI_COMPATIBLE_MODEL,
+        model_type="gpt-4o-mini",  # an example: any model your account can use
+        url=base_url,
+        api_key="unused",  # the provider key stays with Inferrail
+        model_config_dict={
+            "max_tokens": 200,  # each call reserves prompt + max_tokens before it is sent
+            "extra_headers": {
+                "X-Inferrail-Attribute-Work-Id": run_id,
+                "X-Inferrail-Budget-Usd": budget_usd,
+            },
+        },
+    )
+
+
+def run(run_id: str, budget_usd: str, questions: list[str]) -> None:
+    agent = ChatAgent("You are a concise assistant.", model=model_for_run(run_id, budget_usd))
+    for q in questions:
+        try:
+            response = agent.step(q)
+            print(f"[{run_id}] {response.msgs[0].content[:80]!r}")
+        except Exception as e:  # the 402 surfaces as openai.APIStatusError
+            if "402" not in str(e):
+                raise
+            print(f"[{run_id}] stopped: the run's budget was used up (refused before the provider)")
+            return
+```
+
+## Run two agents: one with room, one deliberately tight
+
+The second run's budget covers one call; its second call is refused before it reaches OpenAI.
+
+```python
+questions = ["Name one benefit of unit tests.", "Name one more.", "And one more."]
+run("camel-run-1", "0.05", questions)
+run("camel-run-2", "0.00015", questions)  # deliberately tight
+```
+
+## Read each run's cost
+
+Refused calls are recorded with no cost; nothing was billed for them.
+
+```python
+!inferrail work camel-run-1
+!inferrail work camel-run-2
+```
+
+## With a Workforce
+
+To cap a whole Workforce task, give every worker agent a model built with the same run id and budget. Delegated work then shares one ceiling.
+
+## Notes
+
+- Set `max_tokens`: without it each call reserves a large default and the budget is used up sooner than the real cost would.
+- If a call's real cost exceeds its reservation it still completes, the overrun is recorded, and the run's later calls are refused. It's a ceiling on admission, not a guarantee that spend can never pass the limit by one call.
+- Only calls that go through Inferrail are counted.
+
+I maintain Inferrail; issues and questions are welcome at https://github.com/domondi1/inferrail.
